@@ -94,8 +94,10 @@ class FreeInkDisplay {
 
   // Frame buffer operations
   void clearScreen(uint8_t color = 0xFF) const;
-  void drawImage(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool fromProgmem = false) const;
-  void drawImageTransparent(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool fromProgmem = false) const;
+  void drawImage(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                 bool fromProgmem = false) const;
+  void drawImageTransparent(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                            bool fromProgmem = false) const;
   // Persistent black/white output inversion. Framebuffers remain in their
   // normal logical colors, so callers keep drawing exactly as before; the
   // facade transforms frames only while sending them to the panel. The first
@@ -257,6 +259,15 @@ class FreeInkDisplay {
   // Hint the X3 policy to run a one-shot full resync on next update.
   void requestResync(uint8_t settlePasses = 0);
   void skipInitialResync();
+
+  // Turbo fast waveform: selects the driver's shortened differential waveform
+  // for FAST refreshes on panels that carry one (rapid single-line playback).
+  // Sticky until changed; no-op on drivers without a turbo bank.
+  bool supportsTurboFastWaveform() const;
+  void setTurboFastWaveform(bool enable);
+  // Raw profile level for qualification benches: 0 standard, 1 turbo,
+  // 2 ultra (shortest candidate bank; bench-only). Out-of-range = standard.
+  void setFastWaveformLevel(uint8_t level);
   void beginDisplayWork();
   void abortPostRefresh();
   bool postRefreshAborted() const;

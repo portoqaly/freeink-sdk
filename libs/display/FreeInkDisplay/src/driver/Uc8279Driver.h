@@ -46,6 +46,12 @@ class Uc8279Driver : public PanelDriver {
 
   void requestResync(uint8_t settlePasses) override;
   void skipInitialResync() override;
+
+  // Turbo swaps the DU waveform for the shortened kUc8279X3_BwDuTurbo bank on
+  // Fast differential refreshes; GC-forced refreshes are unaffected.
+  bool supportsFastProfile() const override { return true; }
+  void setFastProfile(FastProfile profile) override { _fastProfile = profile; }
+
   // Inverted (dark-background) content: fast refreshes rewrite the OLD plane
   // as the complement of the target so every pixel is re-driven toward its
   // target each update. See displayStart().
@@ -91,8 +97,9 @@ class Uc8279Driver : public PanelDriver {
 
   bool _isScreenOn = false;
   bool _darkBackground = false;
-  bool _firstRefresh = true;   // CDI 0x97 on the first refresh after init, 0xD7 after
-  bool _oldPlaneValid = false; // DTM1 holds a real previous frame (differential baseline)
+  FastProfile _fastProfile = FastProfile::Standard;
+  bool _firstRefresh = true;    // CDI 0x97 on the first refresh after init, 0xD7 after
+  bool _oldPlaneValid = false;  // DTM1 holds a real previous frame (differential baseline)
   bool _forceFullSyncNext = false;
   // Boot initial-full budget: force GC (strong clear) for this many content
   // paints after begin(), so the first screen after the splash is a real clear

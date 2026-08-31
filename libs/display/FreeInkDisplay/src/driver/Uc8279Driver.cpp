@@ -1,7 +1,6 @@
 #include "Uc8279Driver.h"
 
 #include <Arduino.h>
-
 #include <BoardConfig.h>
 
 #include "../lut/Uc8279X3Luts.h"
@@ -17,7 +16,7 @@ constexpr uint8_t CMD_DTM1 = 0x10;                // OLD plane in KW mode
 constexpr uint8_t CMD_DATA_STOP = 0x11;           // DSP
 constexpr uint8_t CMD_DISPLAY_REFRESH = 0x12;     // DRF
 constexpr uint8_t CMD_DTM2 = 0x13;                // NEW plane in KW mode
-constexpr uint8_t CMD_LUT_VCOM = 0x20;             // first LUT register (0x20-0x24)
+constexpr uint8_t CMD_LUT_VCOM = 0x20;            // first LUT register (0x20-0x24)
 constexpr uint8_t CMD_VCOM_DATA_INTERVAL = 0x50;  // CDI
 constexpr uint8_t CMD_PARTIAL_WINDOW = 0x90;      // PTL
 constexpr uint8_t CMD_PARTIAL_IN = 0x91;          // PTIN
@@ -128,8 +127,7 @@ bool Uc8279Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // first paint, a forced resync, and while the boot initial-full budget is
   // unspent (so the first content screen after boot is a real clear, since
   // CrossPoint paints home with FAST); DU only for a Fast request with a baseline.
-  const bool useGc = (mode != RefreshMode::Fast) || !_oldPlaneValid || _forceFullSyncNext ||
-                     _initialFullsRemaining > 0;
+  const bool useGc = (mode != RefreshMode::Fast) || !_oldPlaneValid || _forceFullSyncNext || _initialFullsRemaining > 0;
 
   bus.cmd(CMD_PARTIAL_IN);  // enter the full-panel PTL window set in init
 
@@ -157,7 +155,10 @@ bool Uc8279Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // to the AA pre-conditioning pass (FUN_42015944), not plain GC/DU refreshes.
   bus.cmd(CMD_VCOM_DATA_INTERVAL);
   bus.data(_firstRefresh ? kUc8279X3_CdiFirst : kUc8279X3_CdiLater);
-  loadBank(bus, useGc ? kUc8279X3_BwGc : kUc8279X3_BwDu);
+  const auto* duBank = _fastProfile == FastProfile::Ultra   ? kUc8279X3_BwDuUltra
+                       : _fastProfile == FastProfile::Turbo ? kUc8279X3_BwDuTurbo
+                                                            : kUc8279X3_BwDu;
+  loadBank(bus, useGc ? kUc8279X3_BwGc : duBank);
   _pendingUsedGc = useGc;
 
   if (!_isScreenOn) {
@@ -188,11 +189,8 @@ void Uc8279Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
 
   // Sync the OLD plane with the just-displayed frame so the NEXT refresh (GC or
   // DU) diffs against the real on-screen content — the core of clean clears and
-  // ghost-free fast page turns. This MUST happen while still inside the PTIN
-  // partial window (before PTOUT): the DTM2 write in displayStart is windowed
-  // (792x528 addressing), so DTM1 must use the same window or the two planes
-  // misalign and the DU diff drives garbage (the new frame never appears — a
-  // full-frame GC hides this because it flashes every pixel regardless).
+  // ghost-free fast page turns. Keep it inside the full-panel PTIN window so
+  // the controller uses the panel's 99-byte row addressing.
   bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
   bus.cmd(CMD_DATA_STOP);
   bus.cmd(CMD_PARTIAL_OUT);
@@ -216,7 +214,7 @@ void Uc8279Driver::requestResync(uint8_t settlePasses) {
 }
 
 void Uc8279Driver::skipInitialResync() {
-  _oldPlaneValid = true;      // caller asserts the panel already holds a valid frame
+  _oldPlaneValid = true;       // caller asserts the panel already holds a valid frame
   _initialFullsRemaining = 0;  // ...so don't force the boot clears
 }
 
