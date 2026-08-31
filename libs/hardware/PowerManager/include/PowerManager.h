@@ -41,9 +41,10 @@ class PowerManager {
   // this, boards with gated rails (e.g. Sticky: GT911 on TP_PWR_EN, SD on
   // SD_PWR_EN, EPD on EP_PWR_EN) leave those peripherals powered all through
   // deep sleep — milliamps of standby drain. No-op on boards whose rails are
-  // PIN_UNASSIGNED (X4/X3). Call after the display driver's deep-sleep command
-  // and before deepSleep(); wake is a chip reset, so rails re-enable in the
-  // normal init path. Display RESET is held LOW when its rail is cut (avoids
+  // PIN_UNASSIGNED (X4); X3 uses it to cut the switched SD rail. Call after the
+  // display driver's deep-sleep command and before deepSleep(); wake is a chip
+  // reset, so rails re-enable in the normal init path. Display RESET is held LOW
+  // when its rail is cut (avoids
   // back-powering an unpowered controller) and HIGH when its rail remains on
   // (keeps deep-sleep state stable). NOTE: cutting the touch rail forfeits
   // touch-to-wake.
