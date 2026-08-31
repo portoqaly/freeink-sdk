@@ -66,12 +66,16 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
   }
 #endif
   const uint32_t started = millis();
-  stop();
   const uint32_t timeoutMs = getTimeout();
-  _transport.setConnectionTimeout(timeoutMs);
-  if (!_transport.connect(host, port)) {
-    if (Serial) Serial.printf("[SecureClient] TCP connect failed (%s): %s:%u\n", label, host, port);
-    return 0;
+  const bool usePreparedTransport = _transportPrepared && _transport.connected();
+  _transportPrepared = false;
+  if (!usePreparedTransport) {
+    stop();
+    _transport.setConnectionTimeout(timeoutMs);
+    if (!_transport.connect(host, port)) {
+      if (Serial) Serial.printf("[SecureClient] TCP connect failed (%s): %s:%u\n", label, host, port);
+      return 0;
+    }
   }
 
   auto* ctx = wolfSSL_CTX_new(static_cast<WOLFSSL_METHOD*>(method));
@@ -229,6 +233,15 @@ void SecureClient::stop() {
   }
   _transport.stop();
   _connected = false;
+  _transportPrepared = false;
+}
+
+int SecureClient::prepareTransport(const char* host, const uint16_t port) {
+  stop();
+  _transport.setConnectionTimeout(getTimeout());
+  if (!_transport.connect(host, port)) return 0;
+  _transportPrepared = true;
+  return 1;
 }
 
 uint8_t SecureClient::connected() { return _connected && _transport.connected(); }
@@ -261,6 +274,7 @@ void SecureClient::stop() {
   _transport.stop();
   _connected = false;
 }
+int SecureClient::prepareTransport(const char*, uint16_t) { return 0; }
 uint8_t SecureClient::connected() { return 0; }
 
 #endif

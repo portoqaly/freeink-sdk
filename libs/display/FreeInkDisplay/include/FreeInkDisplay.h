@@ -265,9 +265,11 @@ class FreeInkDisplay {
   // Sticky until changed; no-op on drivers without a turbo bank.
   bool supportsTurboFastWaveform() const;
   void setTurboFastWaveform(bool enable);
-  // Raw profile level for qualification benches: 0 standard, 1 turbo,
-  // 2 ultra (shortest candidate bank; bench-only). Out-of-range = standard.
+  // Raw fast profile: 0 standard, 1 turbo, 2 ultra (shortest candidate bank).
+  // Out-of-range = standard.
   void setFastWaveformLevel(uint8_t level);
+  bool supportsFastScanWindow() const;
+  void setNextFastScanWindow(uint16_t y, uint16_t h);
   void beginDisplayWork();
   void abortPostRefresh();
   bool postRefreshAborted() const;

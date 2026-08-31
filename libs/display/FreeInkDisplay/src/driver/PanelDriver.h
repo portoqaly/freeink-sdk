@@ -72,6 +72,14 @@ class PanelDriver {
   virtual bool supportsFastProfile() const { return false; }
   virtual void setFastProfile(FastProfile profile) { (void)profile; }
 
+  // One-shot physical gate window for the next eligible FAST differential
+  // update. Drivers that do not implement scan-limited refresh ignore it.
+  virtual bool supportsFastScanWindow() const { return false; }
+  virtual void setNextFastScanWindow(uint16_t y, uint16_t h) {
+    (void)y;
+    (void)h;
+  }
+
   // Two-call refresh split (CrossPoint EInkDisplay::triggerDisplay/completeDisplay).
   // For the shadowed async path the facade passes its own baseline copy as
   // `prev`, so the live fb may be redrawn immediately; otherwise `fb` must

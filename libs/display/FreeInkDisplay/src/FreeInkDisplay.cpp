@@ -904,6 +904,12 @@ void FreeInkDisplay::setFastWaveformLevel(uint8_t level) {
   _driver->setFastProfile(profile);
 }
 
+bool FreeInkDisplay::supportsFastScanWindow() const { return _driver && _driver->supportsFastScanWindow(); }
+
+void FreeInkDisplay::setNextFastScanWindow(uint16_t y, uint16_t h) {
+  if (_driver) _driver->setNextFastScanWindow(y, h);
+}
+
 void FreeInkDisplay::skipInitialResync() {
   if (_driver) _driver->skipInitialResync();
 }

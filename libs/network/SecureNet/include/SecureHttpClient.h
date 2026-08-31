@@ -108,6 +108,19 @@ class SecureHttpClient {
   // setReuse(false) restores connection-per-request behavior.
   void setReuse(bool reuse) { _reuse = reuse; }
 
+  // Establish the small TCP transport before a caller opens a transient memory
+  // window for TLS. The next request reuses this socket for its handshake.
+  bool prepareConnection() {
+    if (_scheme != "https") return false;
+    if (_insecure) {
+      _secure.setInsecure();
+    } else if (_rootCA) {
+      _secure.setCACert(_rootCA);
+    }
+    _secure.setTimeout(_timeoutMs);
+    return _secure.prepareTransport(_host.c_str(), _port) != 0;
+  }
+
   // Parse the URL and reset per-request state. Returns false on a malformed
   // URL.
   bool begin(const std::string& url) {

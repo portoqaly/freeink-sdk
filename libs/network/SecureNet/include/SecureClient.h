@@ -45,6 +45,9 @@ class SecureClient : public Client {
   int peek() override;
   void flush() override;
   void stop() override;
+  // Establish only the TCP transport. A following connect(host, port) reuses
+  // it and performs TLS without opening another socket.
+  int prepareTransport(const char* host, uint16_t port);
   uint8_t connected() override;
   operator bool() override { return connected(); }
 
@@ -60,6 +63,7 @@ class SecureClient : public Client {
   void* _ssl = nullptr;  // WOLFSSL* (opaque to keep wolfSSL headers out of here)
   void* _ctx = nullptr;  // WOLFSSL_CTX*
   bool _connected = false;
+  bool _transportPrepared = false;
 };
 
 }  // namespace freeink

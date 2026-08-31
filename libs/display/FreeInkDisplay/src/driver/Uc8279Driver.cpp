@@ -75,6 +75,47 @@ void Uc8279Driver::grayWindowIn(EpdBus& bus) {
   bus.cmdData(CMD_PARTIAL_WINDOW, kFullWindow, 9);
 }
 
+void Uc8279Driver::setNextFastScanWindow(const uint16_t y, const uint16_t h) {
+  if (h == 0 || y >= _h) {
+    _scanWindowRequested = false;
+    return;
+  }
+  _scanWindowY = y;
+  const uint32_t remaining = static_cast<uint32_t>(_h) - y;
+  _scanWindowH = h < remaining ? h : static_cast<uint16_t>(remaining);
+  _scanWindowRequested = _scanWindowH < _h;
+}
+
+void Uc8279Driver::scanWindowIn(EpdBus& bus, const uint16_t y, const uint16_t h) {
+  // The framebuffer is streamed bottom-first, so logical row y maps to gate
+  // H-1-y. PT_SCAN=0 is decisive: scan only the gates inside this PTL.
+  const uint16_t xEnd = static_cast<uint16_t>(_w - 1u);
+  const uint16_t yEnd = static_cast<uint16_t>(y + h - 1u);
+  const uint16_t gateStart = static_cast<uint16_t>((_h - 1u) - yEnd);
+  const uint16_t gateEnd = static_cast<uint16_t>((_h - 1u) - y);
+  const uint8_t window[9] = {0x00,
+                             0x00,
+                             static_cast<uint8_t>(xEnd >> 8),
+                             static_cast<uint8_t>(xEnd & 0xFF),
+                             static_cast<uint8_t>(gateStart >> 8),
+                             static_cast<uint8_t>(gateStart & 0xFF),
+                             static_cast<uint8_t>(gateEnd >> 8),
+                             static_cast<uint8_t>(gateEnd & 0xFF),
+                             0x00};
+  bus.cmd(CMD_PARTIAL_IN);
+  bus.cmdData(CMD_PARTIAL_WINDOW, window, sizeof(window));
+}
+
+void Uc8279Driver::sendScanRows(EpdBus& bus, const uint8_t ramCmd, const uint8_t* fb, const uint16_t y,
+                                const uint16_t h) {
+  bus.cmd(ramCmd);
+  bus.beginTxn();
+  for (int32_t row = static_cast<int32_t>(y + h) - 1; row >= static_cast<int32_t>(y); --row) {
+    bus.rawWriteBytes(fb + static_cast<uint32_t>(row) * _wb, _wb);
+  }
+  bus.endTxn();
+}
+
 void Uc8279Driver::triggerGrayRefresh(EpdBus& bus, bool turnOff) {
   if (!_isScreenOn) {
     bus.cmd(CMD_POWER_ON);
@@ -99,6 +140,8 @@ void Uc8279Driver::initController(EpdBus& bus) {
   _isScreenOn = false;
   _firstRefresh = true;
   _oldPlaneValid = false;
+  _scanWindowRequested = false;
+  _pendingScanWindow = false;
   // Force the first two content paints after boot to GC. CrossPoint paints the
   // boot splash and then home both with FAST; without this, home would be a DU
   // differential over the splash (light waveform -> the splash ghosts through).
@@ -129,26 +172,37 @@ bool Uc8279Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // CrossPoint paints home with FAST); DU only for a Fast request with a baseline.
   const bool useGc = (mode != RefreshMode::Fast) || !_oldPlaneValid || _forceFullSyncNext || _initialFullsRemaining > 0;
 
-  bus.cmd(CMD_PARTIAL_IN);  // enter the full-panel PTL window set in init
+  const bool useScanWindow = _scanWindowRequested && !useGc && _oldPlaneValid && !_darkBackground;
+  _scanWindowRequested = false;
+  _pendingScanWindow = useScanWindow;
+  _pendingScanWindowY = _scanWindowY;
+  _pendingScanWindowH = _scanWindowH;
 
   // KW planes: OLD (0x10) + NEW (0x13). Seed OLD white ONLY on the first paint
   // (no previous frame exists yet); every later refresh diffs against the OLD
   // plane synced to the last displayed frame in displayFinish().
-  if (!_oldPlaneValid) {
-    bus.fillPlane(CMD_DTM1, 0xFF, _h, _wb);
+  if (useScanWindow) {
+    scanWindowIn(bus, _scanWindowY, _scanWindowH);
+    sendScanRows(bus, CMD_DTM2, fb, _scanWindowY, _scanWindowH);
     bus.cmd(CMD_DATA_STOP);
-  } else if (_darkBackground && !useGc) {
-    // Inverted content: a DU fast idles unchanged pixels, so the light residue
-    // of every white->black transition parks in the black background and
-    // accumulates between GC passes. Rewrite the OLD plane as the complement
-    // of the target: every pixel classifies as changed and is re-driven toward
-    // its target — optically invisible on pixels already at their endpoint.
-    // displayFinish()'s DTM1 sync restores the true baseline afterwards.
-    bus.sendPlaneFlippedInverted(CMD_DTM1, fb, _h, _wb);
+  } else {
+    bus.cmd(CMD_PARTIAL_IN);  // enter the full-panel PTL window set in init
+    if (!_oldPlaneValid) {
+      bus.fillPlane(CMD_DTM1, 0xFF, _h, _wb);
+      bus.cmd(CMD_DATA_STOP);
+    } else if (_darkBackground && !useGc) {
+      // Inverted content: a DU fast idles unchanged pixels, so the light residue
+      // of every white->black transition parks in the black background and
+      // accumulates between GC passes. Rewrite the OLD plane as the complement
+      // of the target: every pixel classifies as changed and is re-driven toward
+      // its target — optically invisible on pixels already at their endpoint.
+      // displayFinish()'s DTM1 sync restores the true baseline afterwards.
+      bus.sendPlaneFlippedInverted(CMD_DTM1, fb, _h, _wb);
+      bus.cmd(CMD_DATA_STOP);
+    }
+    bus.sendPlaneFlipped(CMD_DTM2, fb, _h, _wb);
     bus.cmd(CMD_DATA_STOP);
   }
-  bus.sendPlaneFlipped(CMD_DTM2, fb, _h, _wb);
-  bus.cmd(CMD_DATA_STOP);
 
   // Refresh setup (RE order, FUN_42015786 GC / FUN_4201580a DU): CDI, then the
   // waveform bank. NEITHER B/W path writes E0/E5 — those (0x02/0x5A) belong only
@@ -189,11 +243,24 @@ void Uc8279Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
 
   // Sync the OLD plane with the just-displayed frame so the NEXT refresh (GC or
   // DU) diffs against the real on-screen content — the core of clean clears and
-  // ghost-free fast page turns. Keep it inside the full-panel PTIN window so
-  // the controller uses the panel's 99-byte row addressing.
-  bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
-  bus.cmd(CMD_DATA_STOP);
-  bus.cmd(CMD_PARTIAL_OUT);
+  // ghost-free fast page turns.
+  if (_pendingScanWindow) {
+    // Reassert the exact address window before the OLD-plane write, then put
+    // back the full 792x528 PTL that every other path assumes.
+    scanWindowIn(bus, _pendingScanWindowY, _pendingScanWindowH);
+    sendScanRows(bus, CMD_DTM1, fb, _pendingScanWindowY, _pendingScanWindowH);
+    bus.cmd(CMD_DATA_STOP);
+    bus.cmd(CMD_PARTIAL_OUT);
+    grayWindowIn(bus);
+    bus.cmd(CMD_PARTIAL_OUT);
+    _pendingScanWindow = false;
+  } else {
+    // Keep it inside the full-panel PTIN window so the controller uses the
+    // panel's 99-byte row addressing.
+    bus.sendPlaneFlipped(CMD_DTM1, fb, _h, _wb);
+    bus.cmd(CMD_DATA_STOP);
+    bus.cmd(CMD_PARTIAL_OUT);
+  }
   _oldPlaneValid = true;
   _firstRefresh = false;
   _forceFullSyncNext = false;
@@ -211,6 +278,7 @@ void Uc8279Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
 void Uc8279Driver::requestResync(uint8_t settlePasses) {
   (void)settlePasses;
   _forceFullSyncNext = true;  // next refresh is a full GC flash from white
+  _scanWindowRequested = false;
 }
 
 void Uc8279Driver::skipInitialResync() {

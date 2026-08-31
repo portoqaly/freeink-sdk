@@ -47,10 +47,12 @@ class Uc8279Driver : public PanelDriver {
   void requestResync(uint8_t settlePasses) override;
   void skipInitialResync() override;
 
-  // Turbo swaps the DU waveform for the shortened kUc8279X3_BwDuTurbo bank on
-  // Fast differential refreshes; GC-forced refreshes are unaffected.
+  // Fast profiles swap the DU waveform bank on Fast differential refreshes;
+  // GC-forced refreshes are unaffected.
   bool supportsFastProfile() const override { return true; }
   void setFastProfile(FastProfile profile) override { _fastProfile = profile; }
+  bool supportsFastScanWindow() const override { return true; }
+  void setNextFastScanWindow(uint16_t y, uint16_t h) override;
 
   // Inverted (dark-background) content: fast refreshes rewrite the OLD plane
   // as the complement of the target so every pixel is re-driven toward its
@@ -89,6 +91,11 @@ class Uc8279Driver : public PanelDriver {
   // path is implicitly windowed (init leaves this PTL set + displayStart's PTIN);
   // the grayscale methods must re-assert it explicitly.
   void grayWindowIn(EpdBus& bus);
+  // Enter a full-width PTL whose final byte is PT_SCAN=0, so DRF scans only
+  // the requested physical framebuffer rows. The window stays active through
+  // the waveform and is restored by displayFinish().
+  void scanWindowIn(EpdBus& bus, uint16_t y, uint16_t h);
+  void sendScanRows(EpdBus& bus, uint8_t ramCmd, const uint8_t* fb, uint16_t y, uint16_t h);
 
   uint16_t _w;   // visible width  (792)
   uint16_t _h;   // visible height (528)
@@ -116,6 +123,12 @@ class Uc8279Driver : public PanelDriver {
   bool _pendingRefresh = false;
   bool _pendingTurnOff = false;
   bool _pendingUsedGc = false;  // this refresh ran the GC bank (spends the budget)
+  bool _scanWindowRequested = false;
+  uint16_t _scanWindowY = 0;
+  uint16_t _scanWindowH = 0;
+  bool _pendingScanWindow = false;
+  uint16_t _pendingScanWindowY = 0;
+  uint16_t _pendingScanWindowH = 0;
 };
 
 PanelDriver& uc8279Driver();
