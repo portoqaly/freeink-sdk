@@ -24,9 +24,13 @@ enum class GrayPlane : uint8_t { Lsb, Msb };
 // Waveform profile applied to RefreshMode::Fast. Turbo selects a shorter
 // differential waveform where the driver has one (rapid single-line playback,
 // e.g. Flash reading); Ultra is the shortest candidate bank and is meant for
-// bench qualification only. Drivers without the banks ignore the setting.
+// bench qualification only. Maintain is a band-local re-develop: the driver
+// writes the OLD plane as the complement of the target and runs the stock bank,
+// so every pixel in the scan window is driven toward its state at full
+// strength, erasing residue the differential frames left behind.
+// Drivers without the banks ignore the setting.
 // Sticky until changed — callers set it per frame intent, not per begin().
-enum class FastProfile : uint8_t { Standard, Turbo, Ultra };
+enum class FastProfile : uint8_t { Standard, Turbo, Ultra, Maintain };
 
 struct PanelGeometry {
   uint16_t width;
@@ -72,12 +76,15 @@ class PanelDriver {
   virtual bool supportsFastProfile() const { return false; }
   virtual void setFastProfile(FastProfile profile) { (void)profile; }
 
-  // One-shot physical gate window for the next eligible FAST differential
-  // update. Drivers that do not implement scan-limited refresh ignore it.
+  // One-shot data window for the next eligible FAST differential update.
+  // scanAllGates=false also restricts gate scanning; true transfers only the
+  // window rows but scans the full panel so same-state maintenance transitions
+  // reach pixels outside the changing area. Unsupported drivers ignore it.
   virtual bool supportsFastScanWindow() const { return false; }
-  virtual void setNextFastScanWindow(uint16_t y, uint16_t h) {
+  virtual void setNextFastScanWindow(uint16_t y, uint16_t h, bool scanAllGates) {
     (void)y;
     (void)h;
+    (void)scanAllGates;
   }
 
   // Two-call refresh split (CrossPoint EInkDisplay::triggerDisplay/completeDisplay).

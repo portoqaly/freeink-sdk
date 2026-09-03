@@ -52,7 +52,7 @@ class Uc8279Driver : public PanelDriver {
   bool supportsFastProfile() const override { return true; }
   void setFastProfile(FastProfile profile) override { _fastProfile = profile; }
   bool supportsFastScanWindow() const override { return true; }
-  void setNextFastScanWindow(uint16_t y, uint16_t h) override;
+  void setNextFastScanWindow(uint16_t y, uint16_t h, bool scanAllGates) override;
 
   // Inverted (dark-background) content: fast refreshes rewrite the OLD plane
   // as the complement of the target so every pixel is re-driven toward its
@@ -91,11 +91,13 @@ class Uc8279Driver : public PanelDriver {
   // path is implicitly windowed (init leaves this PTL set + displayStart's PTIN);
   // the grayscale methods must re-assert it explicitly.
   void grayWindowIn(EpdBus& bus);
-  // Enter a full-width PTL whose final byte is PT_SCAN=0, so DRF scans only
-  // the requested physical framebuffer rows. The window stays active through
-  // the waveform and is restored by displayFinish().
-  void scanWindowIn(EpdBus& bus, uint16_t y, uint16_t h);
+  // Enter a full-width PTL for a row-window transfer. PT_SCAN selects whether
+  // DRF scans only those gates or all panel gates. The window stays active
+  // through the waveform and is restored by displayFinish().
+  void scanWindowIn(EpdBus& bus, uint16_t y, uint16_t h, bool scanAllGates);
   void sendScanRows(EpdBus& bus, uint8_t ramCmd, const uint8_t* fb, uint16_t y, uint16_t h);
+  // Same rows with every byte complemented (maintenance re-develop OLD plane).
+  void sendScanRowsInverted(EpdBus& bus, uint8_t ramCmd, const uint8_t* fb, uint16_t y, uint16_t h);
 
   uint16_t _w;   // visible width  (792)
   uint16_t _h;   // visible height (528)
@@ -126,6 +128,7 @@ class Uc8279Driver : public PanelDriver {
   bool _scanWindowRequested = false;
   uint16_t _scanWindowY = 0;
   uint16_t _scanWindowH = 0;
+  bool _scanWindowAllGates = false;
   bool _pendingScanWindow = false;
   uint16_t _pendingScanWindowY = 0;
   uint16_t _pendingScanWindowH = 0;

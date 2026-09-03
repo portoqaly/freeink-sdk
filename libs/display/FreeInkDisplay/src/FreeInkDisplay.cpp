@@ -900,14 +900,27 @@ void FreeInkDisplay::setTurboFastWaveform(bool enable) {
 
 void FreeInkDisplay::setFastWaveformLevel(uint8_t level) {
   if (!_driver) return;
-  const FastProfile profile = level == 1 ? FastProfile::Turbo : level == 2 ? FastProfile::Ultra : FastProfile::Standard;
+  FastProfile profile = FastProfile::Standard;
+  switch (level) {
+    case 1:
+      profile = FastProfile::Turbo;
+      break;
+    case 2:
+      profile = FastProfile::Ultra;
+      break;
+    case 3:
+      profile = FastProfile::Maintain;
+      break;
+    default:
+      break;
+  }
   _driver->setFastProfile(profile);
 }
 
 bool FreeInkDisplay::supportsFastScanWindow() const { return _driver && _driver->supportsFastScanWindow(); }
 
-void FreeInkDisplay::setNextFastScanWindow(uint16_t y, uint16_t h) {
-  if (_driver) _driver->setNextFastScanWindow(y, h);
+void FreeInkDisplay::setNextFastScanWindow(uint16_t y, uint16_t h, bool scanAllGates) {
+  if (_driver) _driver->setNextFastScanWindow(y, h, scanAllGates);
 }
 
 void FreeInkDisplay::skipInitialResync() {

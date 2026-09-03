@@ -75,7 +75,7 @@ void Uc8279Driver::grayWindowIn(EpdBus& bus) {
   bus.cmdData(CMD_PARTIAL_WINDOW, kFullWindow, 9);
 }
 
-void Uc8279Driver::setNextFastScanWindow(const uint16_t y, const uint16_t h) {
+void Uc8279Driver::setNextFastScanWindow(const uint16_t y, const uint16_t h, const bool scanAllGates) {
   if (h == 0 || y >= _h) {
     _scanWindowRequested = false;
     return;
@@ -84,11 +84,13 @@ void Uc8279Driver::setNextFastScanWindow(const uint16_t y, const uint16_t h) {
   const uint32_t remaining = static_cast<uint32_t>(_h) - y;
   _scanWindowH = h < remaining ? h : static_cast<uint16_t>(remaining);
   _scanWindowRequested = _scanWindowH < _h;
+  _scanWindowAllGates = scanAllGates;
 }
 
-void Uc8279Driver::scanWindowIn(EpdBus& bus, const uint16_t y, const uint16_t h) {
+void Uc8279Driver::scanWindowIn(EpdBus& bus, const uint16_t y, const uint16_t h, const bool scanAllGates) {
   // The framebuffer is streamed bottom-first, so logical row y maps to gate
-  // H-1-y. PT_SCAN=0 is decisive: scan only the gates inside this PTL.
+  // H-1-y. PT_SCAN=0 scans only this PTL; PT_SCAN=1 scans every gate while
+  // retaining the smaller RAM-transfer window.
   const uint16_t xEnd = static_cast<uint16_t>(_w - 1u);
   const uint16_t yEnd = static_cast<uint16_t>(y + h - 1u);
   const uint16_t gateStart = static_cast<uint16_t>((_h - 1u) - yEnd);
@@ -101,7 +103,7 @@ void Uc8279Driver::scanWindowIn(EpdBus& bus, const uint16_t y, const uint16_t h)
                              static_cast<uint8_t>(gateStart & 0xFF),
                              static_cast<uint8_t>(gateEnd >> 8),
                              static_cast<uint8_t>(gateEnd & 0xFF),
-                             0x00};
+                             static_cast<uint8_t>(scanAllGates ? 0x01 : 0x00)};
   bus.cmd(CMD_PARTIAL_IN);
   bus.cmdData(CMD_PARTIAL_WINDOW, window, sizeof(window));
 }
@@ -112,6 +114,22 @@ void Uc8279Driver::sendScanRows(EpdBus& bus, const uint8_t ramCmd, const uint8_t
   bus.beginTxn();
   for (int32_t row = static_cast<int32_t>(y + h) - 1; row >= static_cast<int32_t>(y); --row) {
     bus.rawWriteBytes(fb + static_cast<uint32_t>(row) * _wb, _wb);
+  }
+  bus.endTxn();
+}
+
+void Uc8279Driver::sendScanRowsInverted(EpdBus& bus, const uint8_t ramCmd, const uint8_t* fb, const uint16_t y,
+                                        const uint16_t h) {
+  // Complement of the band rows: with OLD = ~NEW every pixel classifies as
+  // changed, so the waveform re-develops the whole band toward its target.
+  uint8_t inverted[99];
+  if (_wb > sizeof(inverted)) return;  // X3-only driver invariant (792/8 = 99)
+  bus.cmd(ramCmd);
+  bus.beginTxn();
+  for (int32_t row = static_cast<int32_t>(y + h) - 1; row >= static_cast<int32_t>(y); --row) {
+    const uint8_t* src = fb + static_cast<uint32_t>(row) * _wb;
+    for (uint16_t i = 0; i < _wb; i++) inverted[i] = static_cast<uint8_t>(~src[i]);
+    bus.rawWriteBytes(inverted, _wb);
   }
   bus.endTxn();
 }
@@ -182,7 +200,15 @@ bool Uc8279Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // (no previous frame exists yet); every later refresh diffs against the OLD
   // plane synced to the last displayed frame in displayFinish().
   if (useScanWindow) {
-    scanWindowIn(bus, _scanWindowY, _scanWindowH);
+    scanWindowIn(bus, _scanWindowY, _scanWindowH, _scanWindowAllGates);
+    if (_fastProfile == FastProfile::Maintain) {
+      // Maintenance = band-local re-develop: OLD gets the complement of the
+      // target so the stock-strength bank drives every band pixel toward its
+      // state, erasing whatever residue the fast frames left behind.
+      // displayFinish() restores the true DTM1 baseline afterwards.
+      sendScanRowsInverted(bus, CMD_DTM1, fb, _scanWindowY, _scanWindowH);
+      bus.cmd(CMD_DATA_STOP);
+    }
     sendScanRows(bus, CMD_DTM2, fb, _scanWindowY, _scanWindowH);
     bus.cmd(CMD_DATA_STOP);
   } else {
@@ -209,9 +235,13 @@ bool Uc8279Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // to the AA pre-conditioning pass (FUN_42015944), not plain GC/DU refreshes.
   bus.cmd(CMD_VCOM_DATA_INTERVAL);
   bus.data(_firstRefresh ? kUc8279X3_CdiFirst : kUc8279X3_CdiLater);
-  const auto* duBank = _fastProfile == FastProfile::Ultra   ? kUc8279X3_BwDuUltra
+  // Maintain runs the STOCK bank: with the complement OLD plane above, the
+  // full ~26-frame directed drive re-develops the band at stock strength.
+  // Ordinary band frames use the stock bank without its same-state snap.
+  const auto* duBank = _fastProfile == FastProfile::Ultra ? kUc8279X3_BwDuUltra
                        : _fastProfile == FastProfile::Turbo ? kUc8279X3_BwDuTurbo
-                                                            : kUc8279X3_BwDu;
+                       : (useScanWindow && _fastProfile == FastProfile::Standard) ? kUc8279X3_BwDuBand
+                                                                                  : kUc8279X3_BwDu;
   loadBank(bus, useGc ? kUc8279X3_BwGc : duBank);
   _pendingUsedGc = useGc;
 
@@ -247,7 +277,7 @@ void Uc8279Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   if (_pendingScanWindow) {
     // Reassert the exact address window before the OLD-plane write, then put
     // back the full 792x528 PTL that every other path assumes.
-    scanWindowIn(bus, _pendingScanWindowY, _pendingScanWindowH);
+    scanWindowIn(bus, _pendingScanWindowY, _pendingScanWindowH, false);
     sendScanRows(bus, CMD_DTM1, fb, _pendingScanWindowY, _pendingScanWindowH);
     bus.cmd(CMD_DATA_STOP);
     bus.cmd(CMD_PARTIAL_OUT);
